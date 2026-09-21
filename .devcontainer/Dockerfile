@@ -111,8 +111,30 @@ RUN set -eux; \
     rm /tmp/herdr; \
     herdr --version
 
+# Install t3code (t3) — runs the local server that the t3client on a developer's own
+# machine pairs with directly over the forwarded port (no cloud relay, no account login).
+# It ships as a Node bundle (launcher + bundled node_modules), so extract the whole
+# directory and symlink the launcher onto PATH. The launcher needs Node, which the Node
+# devcontainer feature installs after this build finishes, so the runnable version check
+# lives in CI (ci-verify-tools.sh); here we only confirm the launcher was extracted.
+ARG T3CODE_VERSION=0.0.42
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+    amd64) T3_ARCH="x64";   T3_SHA256="f504e931ee4406bfe76754147cb0e2a0f300d75c6c505a0e174a1e79f65ceea3" ;; \
+    arm64) T3_ARCH="arm64"; T3_SHA256="7de47e66793c91b01ee3fb304d9d2dc9a7019aaa8f85c55b535d6d8ca3e14013" ;; \
+    *)     echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/t3.tar.gz \
+    "https://github.com/pingdotgg/t3code/releases/download/v${T3CODE_VERSION}/t3-${T3CODE_VERSION}-linux-${T3_ARCH}.tar.gz"; \
+    echo "${T3_SHA256}  /tmp/t3.tar.gz" | sha256sum -c -; \
+    install -d /opt/t3; \
+    tar -xzf /tmp/t3.tar.gz -C /opt/t3; \
+    ln -sf "/opt/t3/t3-${T3CODE_VERSION}-linux-${T3_ARCH}/t3" /usr/local/bin/t3; \
+    rm /tmp/t3.tar.gz; \
+    test -x "/opt/t3/t3-${T3CODE_VERSION}-linux-${T3_ARCH}/t3"
+
 # Prepare persistent agent state directories before Docker initializes named volumes
-RUN install -d -o vscode -g vscode /home/vscode/.omp /home/vscode/.config/herdr
+RUN install -d -o vscode -g vscode /home/vscode/.omp /home/vscode/.config/herdr /home/vscode/.t3
 
 # Install AWS CLI with Session Manager Plugin
 RUN case "${TARGETARCH}" in \

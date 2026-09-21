@@ -43,6 +43,7 @@ check claude     claude --version
 check codex      codex --version
 check omp        omp --version
 check herdr      herdr --version
+check t3         t3 --version
 check dotnet-ef  dotnet ef --version
 check ng         ng --version
 check phpcs      phpcs --version
