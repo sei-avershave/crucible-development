@@ -82,11 +82,11 @@ RUN set -eux; \
     && vale --version
 
 # Install OMP
-ARG OMP_VERSION=18.1.1
+ARG OMP_VERSION=18.2.7
 RUN set -eux; \
     case "${TARGETARCH}" in \
-    amd64) OMP_ARCH="x64"; OMP_SHA256="04780b41fb33b658ca6e8449353911babc8c90332ac444e7e6562d041d3eae52" ;; \
-    arm64) OMP_ARCH="arm64"; OMP_SHA256="a8bf4dcc47dcf3284a0f6c43ffeb94adc0a2f031dcd7f8ab8ed92d0215c89a9d" ;; \
+    amd64) OMP_ARCH="x64"; OMP_SHA256="1c28ed66566ecabab814514cfe626b4aff5981b7ca9892477b46550fe6b6d83b" ;; \
+    arm64) OMP_ARCH="arm64"; OMP_SHA256="dee01159c63577eafe1e9396b1687462352063ec1b62203177946fc5d5acff1a" ;; \
     *)     echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/omp \
@@ -97,11 +97,11 @@ RUN set -eux; \
     omp --version
 
 # Install Herdr
-ARG HERDR_VERSION=0.8.2
+ARG HERDR_VERSION=0.9.1
 RUN set -eux; \
     case "${TARGETARCH}" in \
-    amd64) HERDR_ARCH="x86_64"; HERDR_SHA256="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4" ;; \
-    arm64) HERDR_ARCH="aarch64"; HERDR_SHA256="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d" ;; \
+    amd64) HERDR_ARCH="x86_64"; HERDR_SHA256="2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7" ;; \
+    arm64) HERDR_ARCH="aarch64"; HERDR_SHA256="f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e" ;; \
     *)     echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/herdr \
