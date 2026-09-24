@@ -279,3 +279,156 @@ on_interrupt() {
   fi
   exit 130
 }
+
+# ---------------------------------------------------------------------------------------------
+# Sources and verification. Tests replace fetch_versions, url_sha256, and url_exists.
+
+# Prints the versions published for entry $1, one per line (ver_filter cleans them up).
+# Fails with a message on stderr if the lookup fails.
+fetch_versions() {
+  local e=$1
+  case $(field "$e" .source.type) in
+    github-release)
+      gh api "repos/$(field "$e" .source.repo)/releases?per_page=100" \
+        --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' ;;
+    github-tag)
+      gh api --paginate \
+        "repos/$(field "$e" .source.repo)/git/matching-refs/tags/$(field "$e" .source.prefix)" \
+        --jq '.[].ref | ltrimstr("refs/tags/")' ;;
+    npm)
+      npm view "$(field "$e" .source.package)" versions --json |
+        jq -r 'if type == "array" then .[] else . end' ;;
+    go)
+      curl -fsSL 'https://go.dev/dl/?mode=json&include=all' |
+        jq -r '.[] | select(.stable) | .version | ltrimstr("go")' ;;
+    node)
+      curl -fsSL https://nodejs.org/dist/index.json | jq -r '.[] | select(.lts) | .version' ;;
+    k8s)
+      curl -fsSL https://dl.k8s.io/release/stable.txt && echo ;;
+    mcr)
+      curl -fsSL "https://mcr.microsoft.com/v2/$(field "$e" .source.image)/tags/list" |
+        jq -r --arg s "$(field "$e" .source.suffix)" '.tags[] | select(endswith($s)) | rtrimstr($s)' ;;
+    ghcr)
+      local image token
+      image=$(field "$e" .source.image)
+      token=$(curl -fsSL "https://ghcr.io/token?scope=repository:$image:pull" | jq -r .token) ||
+        return 1
+      curl -fsSL -H "Authorization: Bearer $token" "https://ghcr.io/v2/$image/tags/list?n=1000" |
+        jq -r '.tags[]' ;;
+    *)
+      echo "unknown source type '$(field "$e" .source.type)'" >&2
+      return 1 ;;
+  esac
+}
+
+# Prints the sha256 of the file at URL $1. Downloads to a file first, so a failed download can
+# never produce the checksum of an empty stream.
+url_sha256() {
+  local out sum
+  out=$(mktemp "$WORK/download.XXXXXX")
+  if ! curl -fsSL --retry 2 -o "$out" "$1"; then
+    rm -f "$out"
+    return 1
+  fi
+  sum=$(sha256sum "$out" | cut -d' ' -f1)
+  rm -f "$out"
+  echo "$sum"
+}
+
+# True if URL $1 can be downloaded. Fetches one byte: GitHub's signed download URLs refuse HEAD.
+url_exists() {
+  curl -fsSL --retry 2 -r 0-0 -o /dev/null "$1"
+}
+
+# Prints URL template $1 with {version} replaced by $2 and {arch} by $3.
+render_url() {
+  local url=${1//"{version}"/$2}
+  echo "${url//"{arch}"/${3:-}}"
+}
+
+# Confirms entry $1 can be installed at version $2. Prints the checksums it needs as
+# "<arch> <sha256>" lines ("-" as the arch for a single checksum), or nothing if it has none.
+verify_candidate() {
+  local e=$1 v=$2 url arch sum
+  url=$(field "$e" .sha256.url)
+  if [[ -n $url ]]; then
+    if [[ -z $(field "$e" .sha256.arch) ]]; then
+      sum=$(url_sha256 "$(render_url "$url" "$v")") || { echo "cannot download $(render_url "$url" "$v")" >&2; return 1; }
+      echo "- $sum"
+      return 0
+    fi
+    for arch in $(jq -r '.sha256.arch | keys[]' <<<"$e"); do
+      url=$(render_url "$(field "$e" .sha256.url)" "$v" "$(field "$e" ".sha256.arch.$arch")")
+      sum=$(url_sha256 "$url") || { echo "cannot download $url" >&2; return 1; }
+      echo "$arch $sum"
+    done
+    return 0
+  fi
+  url=$(field "$e" .url)
+  if [[ -z $url ]]; then
+    return 0
+  fi
+  if [[ -z $(field "$e" .arch) ]]; then
+    url_exists "$(render_url "$url" "$v")" || { echo "cannot download $(render_url "$url" "$v")" >&2; return 1; }
+    return 0
+  fi
+  for arch in $(jq -r '.arch | keys[]' <<<"$e"); do
+    url=$(render_url "$(field "$e" .url)" "$v" "$(field "$e" ".arch.$arch")")
+    url_exists "$url" || { echo "cannot download $url" >&2; return 1; }
+  done
+}
+
+# ---------------------------------------------------------------------------------------------
+# Planning
+
+# Prints "<minor|major> <version>" rows for entry index $1. With $2 = verify, each candidate is
+# also checked by verify_candidate, its checksums saved to $WORK/sums/<index>-<version>, and a
+# candidate that fails is dropped with the reason on stderr.
+plan_one() {
+  local i=$1 mode=${2:-} e=${ENTRIES[$1]} current versions kind v sums
+  current=$(current_value "$e") || { echo "cannot find its current version" >&2; return 1; }
+  if ! versions=$(fetch_versions "$e" 2>&1); then
+    echo "lookup failed: ${versions##*$'\n'}" >&2
+    return 1
+  fi
+  # A source that answers with nothing usable is misconfigured, not up to date.
+  if [[ -z $(ver_filter "$(ver_parts "$current")" <<<"$versions") ]]; then
+    echo "lookup found no versions" >&2
+    return 1
+  fi
+  while read -r kind v; do
+    if [[ $mode == verify ]]; then
+      if ! sums=$(verify_candidate "$e" "$v" 2>&1); then
+        echo "$v skipped: ${sums##*$'\n'}" >&2
+        continue
+      fi
+      printf '%s\n' "$sums" >"$WORK/sums/$i-$v"
+    fi
+    echo "$kind $v"
+  done < <(pick_candidates "$current" <<<"$versions")
+}
+
+# Runs plan_one (mode $1) in parallel for each entry index after the first two arguments,
+# writing <dir $2>/<index>.rows and <index>.err. Held entries are not looked up.
+lookup_all() {
+  local mode=$1 dir=$2 i
+  shift 2
+  mkdir -p "$dir"
+  for i in "$@"; do
+    if [[ $(field "${ENTRIES[i]}" .hold) != true ]]; then
+      plan_one "$i" "$mode" >"$dir/$i.rows" 2>"$dir/$i.err" &
+    fi
+  done
+  wait
+}
+
+# Prints the manifest indexes of entries whose kind is one of the arguments.
+entries_of_kind() {
+  local i kind
+  for i in "${!ENTRIES[@]}"; do
+    kind=$(field "${ENTRIES[i]}" .kind)
+    if [[ " $* " == *" $kind "* ]]; then
+      echo "$i"
+    fi
+  done
+}

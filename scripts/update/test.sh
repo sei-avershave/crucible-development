@@ -323,4 +323,149 @@ test_interrupt_restores_file_in_progress() {
 }
 on_interrupt_in_subshell() { (on_interrupt); }
 
+# Stubs. Tests fill STUB_VERSIONS (entry name -> space-separated versions) and STUB_URLS
+# (URL -> sha256). A name or URL that is missing fails the way a 404 would.
+declare -A STUB_VERSIONS=() STUB_URLS=()
+fetch_versions() {
+  local name
+  name=$(field "$1" .name)
+  echo "$name" >>"$WORK/fetch-calls"
+  if [[ -z ${STUB_VERSIONS[$name]+set} ]]; then
+    echo "HTTP 404: Not Found" >&2
+    return 1
+  fi
+  printf '%s\n' ${STUB_VERSIONS[$name]}
+}
+url_sha256() {
+  if [[ -z ${STUB_URLS[$1]+set} ]]; then
+    echo "curl: (22) The requested URL returned error: 404" >&2
+    return 1
+  fi
+  echo "${STUB_URLS[$1]}"
+}
+url_exists() { [[ -n ${STUB_URLS[$1]+set} ]]; }
+
+# ---------------------------------------------------------------------------------------------
+# Sources and verification
+
+test_verify_per_arch_downloads() {
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-arm64"]=$SHA_2
+  check "sums" "amd64 $SHA_1"$'\n'"arm64 $SHA_2" "$(verify_candidate "$(entry omp)" 18.3.0)"
+}
+
+test_verify_single_download() {
+  STUB_URLS["https://example.test/composer/2.10.4/composer.phar"]=$SHA_3
+  check "sums" "- $SHA_3" "$(verify_candidate "$(entry Composer)" 2.10.4)"
+}
+
+test_verify_fails_on_missing_arch_download() {
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  check "message" "cannot download https://example.test/omp/v18.3.0/omp-linux-arm64" \
+    "$(verify_candidate "$(entry omp)" 18.3.0 2>&1 >/dev/null | tail -n1)"
+  check_status "status" 1 verify_candidate "$(entry omp)" 18.3.0
+}
+
+test_verify_existence_only() {
+  STUB_URLS["https://example.test/awscli-exe-linux-x86_64-2.33.0.zip"]=x
+  STUB_URLS["https://example.test/awscli-exe-linux-aarch64-2.33.0.zip"]=x
+  check "no sums" "" "$(verify_candidate "$(entry "AWS CLI")" 2.33.0)"
+  check_status "both exist" 0 verify_candidate "$(entry "AWS CLI")" 2.33.0
+  check_status "one missing" 1 verify_candidate "$(entry "AWS CLI")" 2.34.0
+}
+
+test_plan_one_saves_sums_and_drops_unverifiable_candidates() {
+  local i
+  i=$(index_of omp)
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0 v19.0.0"
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-arm64"]=$SHA_2
+  check "rows" "minor 18.3.0" "$(plan_one "$i" verify 2>/dev/null)"
+  check "reason" "19.0.0 skipped: cannot download https://example.test/omp/v19.0.0/omp-linux-x64" \
+    "$(plan_one "$i" verify 2>&1 >/dev/null)"
+  check "sums" "amd64 $SHA_1"$'\n'"arm64 $SHA_2" "$(cat "$WORK/sums/$i-18.3.0")"
+}
+
+test_lookup_with_no_usable_versions_is_an_error() {
+  local i
+  i=$(index_of omp)
+  STUB_VERSIONS[omp]="latest nightly v19.0.0-rc.1"
+  lookup_all "" "$WORK/plan" "$i"
+  check "error" "lookup found no versions" "$(cat "$WORK/plan/$i.err")"
+}
+
+test_url_sha256_hashes_the_download_and_fails_on_error() {
+  unset -f url_sha256
+  source "$HERE/update.sh"
+  curl() {
+    local out
+    while (($#)); do
+      if [[ $1 == -o ]]; then out=$2; fi
+      shift
+    done
+    [[ -n ${STUB_CURL_FAIL:-} ]] && return 22
+    printf 'hello\n' >"$out"
+  }
+  check "sha" "$(printf 'hello\n' | sha256sum | cut -d' ' -f1)" "$(url_sha256 https://example.test/f)"
+  STUB_CURL_FAIL=1
+  check "no output on failure" "" "$(url_sha256 https://example.test/f)"
+  check_status "status on failure" 1 url_sha256 https://example.test/f
+  check "no temp files left" "" "$(ls "$WORK" | grep download)"
+}
+
+test_lookup_all_records_failures_and_skips_held() {
+  local node dotnet vale
+  node=$(index_of Node.js) dotnet=$(index_of ".NET SDK (extra)") vale=$(index_of Vale)
+  STUB_VERSIONS[Node.js]="v24.15.0 v24.16.0"
+  lookup_all "" "$WORK/plan" "$node" "$dotnet" "$vale"
+  check "node rows" "minor 24.16" "$(cat "$WORK/plan/$node.rows")"
+  check "vale error" "lookup failed: HTTP 404: Not Found" "$(cat "$WORK/plan/$vale.err")"
+  check "held not looked up" "" "$(grep -x ".NET SDK (extra)" "$WORK/fetch-calls")"
+}
+
+# The real fetch_versions against canned API responses. gh, curl, and npm are stubbed to print
+# what the service would return; the jq filters in fetch_versions do the rest.
+test_fetch_versions_parses_each_source() {
+  source_of() { printf '{"name":"x","source":%s}' "$1"; }
+  unset -f fetch_versions
+  source "$HERE/update.sh"   # restore the real fetch_versions over the stub
+  gh() {
+    local jq_filter="" a
+    for a in "$@"; do
+      if [[ ${prev:-} == --jq ]]; then jq_filter=$a; fi
+      prev=$a
+    done
+    case "$*" in
+      *releases*) jq -r "$jq_filter" <<<'[{"tag_name":"v2.0.0","draft":false,"prerelease":false},
+        {"tag_name":"v2.1.0-rc1","draft":false,"prerelease":true},
+        {"tag_name":"v2.1.0","draft":true,"prerelease":false},
+        {"tag_name":"v1.9.9","draft":false,"prerelease":false}]' ;;
+      *matching-refs*) jq -r "$jq_filter" <<<'[{"ref":"refs/tags/2.32.9"},{"ref":"refs/tags/2.33.0"}]' ;;
+    esac
+  }
+  npm() { echo '["1.0.0","1.1.0"]'; }
+  curl() {
+    case "$*" in
+      *go.dev*) echo '[{"version":"go1.26.1","stable":true},{"version":"go1.27rc1","stable":false}]' ;;
+      *nodejs.org*) echo '[{"version":"v25.1.0","lts":false},{"version":"v24.16.0","lts":"Krypton"}]' ;;
+      *dl.k8s.io*) printf 'v1.35.2' ;;
+      *mcr.microsoft.com*) echo '{"tags":["2.0.5-10.0-noble","2.0.6-10.0-noble","2-10.0-noble","2.0.6-9.0-noble","dev-10.0-noble"]}' ;;
+      *ghcr.io/token*) echo '{"token":"t"}' ;;
+      *ghcr.io/v2*) echo '{"tags":["1","1.0","1.0.6","latest"]}' ;;
+    esac
+  }
+  check "github-release" $'v2.0.0\nv1.9.9' "$(fetch_versions "$(source_of '{"type":"github-release","repo":"o/r"}')")"
+  check "github-tag" $'2.32.9\n2.33.0' "$(fetch_versions "$(source_of '{"type":"github-tag","repo":"o/r","prefix":"2."}')")"
+  check "npm" $'1.0.0\n1.1.0' "$(fetch_versions "$(source_of '{"type":"npm","package":"p"}')")"
+  check "go" "1.26.1" "$(fetch_versions "$(source_of '{"type":"go"}')")"
+  check "node" "v24.16.0" "$(fetch_versions "$(source_of '{"type":"node"}')")"
+  check "k8s" "v1.35.2" "$(fetch_versions "$(source_of '{"type":"k8s"}')")"
+  check "mcr" $'2.0.5\n2.0.6\n2\ndev' \
+    "$(fetch_versions "$(source_of '{"type":"mcr","image":"devcontainers/dotnet","suffix":"-10.0-noble"}')")"
+  check "mcr after filter" $'2.0.5\n2.0.6' \
+    "$(fetch_versions "$(source_of '{"type":"mcr","image":"devcontainers/dotnet","suffix":"-10.0-noble"}')" | ver_filter 3)"
+  check "ghcr" $'1\n1.0\n1.0.6\nlatest' "$(fetch_versions "$(source_of '{"type":"ghcr","image":"o/f"}')")"
+  check_status "unknown type" 1 fetch_versions "$(source_of '{"type":"svn"}')"
+}
+
 run_tests "$@"
