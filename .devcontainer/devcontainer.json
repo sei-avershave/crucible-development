@@ -62,7 +62,11 @@
     "SSL_CERT_DIR": "/usr/local/share/ca-certificates/:/etc/ssl/certs/:/home/vscode/.aspnet/dev-certs/trust/",
     // Set on the host by .github/workflows/devcontainer-ci.yml to skip external
     // repo cloning in CI. Resolves to an empty string on developer machines.
-    "CRUCIBLE_CI_SKIP_CLONE": "${localEnv:CRUCIBLE_CI_SKIP_CLONE}"
+    "CRUCIBLE_CI_SKIP_CLONE": "${localEnv:CRUCIBLE_CI_SKIP_CLONE}",
+    // Opt-in per developer: set CRUCIBLE_ENABLE_T3=1 on the host to auto-start the t3code
+    // server at container startup (poststart.sh) so the t3client on your machine can pair
+    // with this container. Empty for developers who don't use t3code, so it stays off.
+    "CRUCIBLE_ENABLE_T3": "${localEnv:CRUCIBLE_ENABLE_T3}"
   },
   // Nothing here sets PATH. phpcs and phpcbf reach it by symlink from postcreate.sh; see
   // the comment there for why neither containerEnv nor remoteEnv works for that.
@@ -84,6 +88,8 @@
     "source=crucible-dev-omp,target=/home/vscode/.omp,type=volume",
     // Herdr settings, session state, and logs
     "source=crucible-dev-herdr,target=/home/vscode/.config/herdr,type=volume",
+    // t3code server state: pairing/authorized devices and config
+    "source=crucible-dev-t3,target=/home/vscode/.t3,type=volume",
     // SSH keys and config
     "source=crucible-dev-ssh,target=/home/vscode/.ssh,type=volume",
     // GitHub CLI auth
@@ -114,7 +120,10 @@
     // Moodle. Declared explicitly because the containers are persistent: recreating one
     // replaces the listening socket, and an auto-detected forward does not survive that.
     8081, // Moodle 5.0
-    8082 // Moodle 5.2
+    8082, // Moodle 5.2
+    // t3code server (opt-in via CRUCIBLE_ENABLE_T3). Pair the t3client on your machine
+    // to http://localhost:3939. Declared explicitly so the forward survives restarts.
+    3939 // t3code
   ],
   "customizations": {
     "vscode": {
