@@ -432,3 +432,160 @@ entries_of_kind() {
     fi
   done
 }
+
+# Reads chosen "<index>:<minor|major>" tags on stdin and prints "<index> <kind>" once per index,
+# preferring major when both of an item's rows were chosen. Other tags are ignored.
+resolve_choices() {
+  awk -F: '$1 ~ /^[0-9]+$/ { if (!($1 in pick) || $2 == "major") pick[$1] = $2 }
+           END { for (i in pick) print i, pick[i] }' | sort -n
+}
+
+# ---------------------------------------------------------------------------------------------
+# Terminal UI. Tests replace these.
+
+# Shows a checklist titled $1, built from the tag/label/on|off triples that follow, and prints
+# the chosen tags one per line. Fails if the user presses Cancel or Esc.
+dialog_checklist() {
+  local title=$1
+  shift
+  dialog --backtitle "Crucible dev container update" --title "$title" --separate-output \
+    --checklist "Space toggles an item, Enter applies. Cancel or Esc skips this step." \
+    0 0 0 "$@" 2>&1 >/dev/tty
+}
+
+# Asks yes/no question $2 titled $1. Fails on No, Cancel, or Esc.
+dialog_yesno() {
+  dialog --backtitle "Crucible dev container update" --title "$1" --yesno "$2" 0 0 >/dev/tty
+}
+
+# Shows message $2 titled $1 until the user presses Enter.
+dialog_notice() {
+  dialog --backtitle "Crucible dev container update" --title "$1" --msgbox "$2" 0 0 >/dev/tty
+}
+
+clear_screen() {
+  clear >/dev/tty 2>/dev/null || true
+}
+
+# Refreshes devcontainer-lock.json from the Feature versions in devcontainer.json.
+refresh_lock() {
+  (cd "$REPO_ROOT" && npx --yes @devcontainers/cli upgrade --workspace-folder .)
+}
+
+# Runs manifest command $1 from the repo root.
+run_command() {
+  (cd "$REPO_ROOT" && bash -c "$1")
+}
+
+sync_repos() {
+  (cd "$REPO_ROOT" && scripts/sync-repos.sh --pull)
+}
+
+# ---------------------------------------------------------------------------------------------
+# Steps. Each one adds to UPDATED, SKIPPED, FAILED, and HELD for the summary.
+
+# Runs the pins or features step ($1): look up and verify, show the checklist, apply the choices.
+run_edit_step() {
+  local step=$1 title i kind v e old row label tags err changed=false
+  local -a idx=() args=() applied=()
+  local -A cand=() chosen=()
+  if [[ $step == pins ]]; then
+    title="Pinned tools (Dockerfile)"
+    mapfile -t idx < <(entries_of_kind dockerfile-arg base-image)
+  else
+    title="Features (devcontainer.json)"
+    mapfile -t idx < <(entries_of_kind feature-option feature-ref)
+    cp "$DEVCONTAINER_JSON" "$WORK/devcontainer.json.before"
+    cp "$LOCK_JSON" "$WORK/devcontainer-lock.json.before"
+  fi
+
+  echo "$title: looking up ${#idx[@]} versions..."
+  lookup_all verify "$WORK/$step" "${idx[@]}"
+
+  local -a problems=()
+  for i in "${idx[@]}"; do
+    e=${ENTRIES[i]}
+    if [[ $(field "$e" .hold) == true ]]; then
+      HELD+=("$(field "$e" .name) $(current_value "$e" || echo '?'): $(field "$e" .reason)")
+      continue
+    fi
+    if [[ -s $WORK/$step/$i.err ]]; then
+      while read -r err; do
+        problems+=("$(field "$e" .name): $err")
+      done <"$WORK/$step/$i.err"
+    fi
+    while read -r kind v; do
+      cand["$i $kind"]=$v
+      label="$(field "$e" .name)  $(current_value "$e") -> $v"
+      if [[ $kind == major ]]; then
+        args+=("$i:$kind" "$label  MAJOR" off)
+      else
+        args+=("$i:$kind" "$label" on)
+      fi
+    done <"$WORK/$step/$i.rows"
+  done
+
+  if ((${#problems[@]})); then
+    SKIPPED+=("${problems[@]}")
+    # Esc on the notice exits non-zero; it must not stop the run.
+    dialog_notice "$title: not offered" "$(printf '%s\n' "${problems[@]}")" || true
+  fi
+  if [[ $step == features ]]; then
+    args+=(lock "Refresh Feature lock file" off)
+  elif ((${#args[@]} == 0)); then
+    clear_screen
+    echo "$title: everything is up to date."
+    return 0
+  fi
+
+  if ! tags=$(dialog_checklist "$title" "${args[@]}"); then
+    clear_screen
+    SKIPPED+=("$title: cancelled")
+    return 0
+  fi
+  clear_screen
+
+  while read -r i kind; do
+    chosen[$i]=1
+    e=${ENTRIES[i]}
+    v=${cand["$i $kind"]}
+    old=$(current_value "$e")
+    if err=$(apply_item "$e" "$v" "$(cat "$WORK/sums/$i-$v" 2>/dev/null)" 2>&1); then
+      applied+=("$(field "$e" .name)  $old -> $v")
+      changed=true
+    else
+      FAILED+=("$(field "$e" .name): $err")
+    fi
+  done < <(resolve_choices <<<"$tags")
+
+  for row in "${!cand[@]}"; do
+    i=${row% *}
+    if [[ -z ${chosen[$i]:-} ]]; then
+      chosen[$i]=0
+      SKIPPED+=("$(field "${ENTRIES[i]}" .name): not chosen")
+    fi
+  done
+
+  if [[ $step == features ]] && { $changed || grep -qx lock <<<"$tags"; }; then
+    echo "Refreshing devcontainer-lock.json..."
+    if ! refresh_lock; then
+      cat "$WORK/devcontainer.json.before" >"$DEVCONTAINER_JSON"
+      cat "$WORK/devcontainer-lock.json.before" >"$LOCK_JSON"
+      for row in "${applied[@]}"; do
+        FAILED+=("${row%%  *}: lock file refresh failed, devcontainer.json restored")
+      done
+      if ! $changed; then
+        FAILED+=("Feature lock file: refresh failed")
+      fi
+      return 0
+    fi
+    if ! $changed; then
+      UPDATED+=("Feature lock file refreshed")
+    fi
+  fi
+
+  UPDATED+=("${applied[@]}")
+  if $changed; then
+    REBUILD=true
+  fi
+}

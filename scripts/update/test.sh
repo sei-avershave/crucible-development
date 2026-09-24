@@ -468,4 +468,151 @@ test_fetch_versions_parses_each_source() {
   check_status "unknown type" 1 fetch_versions "$(source_of '{"type":"svn"}')"
 }
 
+# dialog stubs: STUB_CHOICES (space-separated tags) overrides the default of choosing every row
+# that starts "on"; STUB_CANCEL=1 presses Cancel. Notices are appended to $WORK/notices.
+dialog_checklist() {
+  shift
+  if [[ -n ${STUB_CANCEL:-} ]]; then
+    return 1
+  fi
+  if [[ -n ${STUB_CHOICES+set} ]]; then
+    printf '%s\n' $STUB_CHOICES
+    return 0
+  fi
+  while (($#)); do
+    if [[ $3 == on ]]; then
+      echo "$1"
+    fi
+    shift 3
+  done
+}
+dialog_yesno() { [[ -z ${STUB_CANCEL:-} ]]; }
+dialog_notice() { printf '%s\n%s\n' "$1" "$2" >>"$WORK/notices"; }
+clear_screen() { :; }
+refresh_lock() {
+  echo refreshed >>"$WORK/lock-calls"
+  if [[ -n ${STUB_LOCK_WRITE:-} ]]; then
+    echo "$STUB_LOCK_WRITE" >"$LOCK_JSON"
+  fi
+  return "${STUB_LOCK_STATUS:-0}"
+}
+sync_repos() {
+  echo pulled >>"$WORK/sync-calls"
+  return "${STUB_SYNC_STATUS:-0}"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Pins and features steps
+
+test_pins_step_applies_preselected_rows() {
+  STUB_VERSIONS["base image"]="2.0.5 2.0.6"
+  STUB_VERSIONS["AWS CLI"]="2.32.9"
+  STUB_VERSIONS[Composer]="2.10.3"
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0 v19.0.0"
+  STUB_VERSIONS[Vale]="v3.12.0"
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-arm64"]=$SHA_2
+  STUB_URLS["https://example.test/omp/v19.0.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v19.0.0/omp-linux-arm64"]=$SHA_2
+  run_edit_step pins >/dev/null
+  check "updated" $'base image  2.0.5 -> 2.0.6\nomp  18.2.7 -> 18.3.0' "$(printf '%s\n' "${UPDATED[@]}")"
+  check "omp version" 18.3.0 "$(current_value "$(entry omp)")"
+  check "omp arm64 sum" "$SHA_2" "$(anchor_value "$(anchor "$(entry omp)" sha256:arm64)")"
+  check "rebuild" true "$REBUILD"
+  check "failed" "" "${FAILED[*]}"
+}
+
+test_pins_step_major_wins_when_both_rows_chosen() {
+  local i
+  i=$(index_of omp)
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0 v19.0.0"
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-arm64"]=$SHA_2
+  STUB_URLS["https://example.test/omp/v19.0.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v19.0.0/omp-linux-arm64"]=$SHA_2
+  STUB_CHOICES="$i:minor $i:major"
+  run_edit_step pins >/dev/null
+  check "omp version" 19.0.0 "$(current_value "$(entry omp)")"
+}
+
+test_pins_step_reports_lookup_and_download_problems() {
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0"
+  run_edit_step pins >/dev/null
+  check "notice" "Pinned tools (Dockerfile): not offered" "$(head -n1 "$WORK/notices")"
+  check "vale skipped" "Vale: lookup failed: HTTP 404: Not Found" "$(printf '%s\n' "${SKIPPED[@]}" | grep '^Vale')"
+  check "omp skipped" "omp: 18.3.0 skipped: cannot download https://example.test/omp/v18.3.0/omp-linux-x64" \
+    "$(printf '%s\n' "${SKIPPED[@]}" | grep '^omp')"
+  check "nothing changed" "" "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
+test_pins_step_survives_esc_on_the_notice() {
+  dialog_notice() { return 255; }
+  STUB_VERSIONS["base image"]="2.0.5 2.0.6"
+  run_edit_step pins >/dev/null
+  check "still applied" "base image  2.0.5 -> 2.0.6" "${UPDATED[*]}"
+}
+
+test_pins_step_cancel_changes_nothing() {
+  STUB_VERSIONS["base image"]="2.0.5 2.0.6"
+  STUB_CANCEL=1
+  run_edit_step pins >/dev/null
+  check "nothing changed" "" "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+  check "skipped" "Pinned tools (Dockerfile): cancelled" "${SKIPPED[-1]}"
+  check "updated" "" "${UPDATED[*]}"
+}
+
+test_pins_step_records_unchosen_rows() {
+  STUB_VERSIONS["base image"]="2.0.5 2.0.6"
+  STUB_CHOICES=""
+  run_edit_step pins >/dev/null
+  check "skipped" "base image: not chosen" "$(printf '%s\n' "${SKIPPED[@]}" | grep '^base image')"
+}
+
+test_features_step_refreshes_lock_once_and_reports_held() {
+  STUB_VERSIONS[Node.js]="v24.15.0 v24.16.0"
+  STUB_VERSIONS[TFLint]="v0.62.0 v0.62.1"
+  run_edit_step features >/dev/null
+  check "updated" $'TFLint  0.62.0 -> 0.62.1\nNode.js  24.15 -> 24.16' "$(printf '%s\n' "${UPDATED[@]}")"
+  check "lock refreshed once" refreshed "$(cat "$WORK/lock-calls")"
+  check "held" ".NET SDK (extra) 8.0: kept on 8.0 on purpose" "${HELD[*]}"
+}
+
+test_features_step_restores_both_files_when_lock_refresh_fails() {
+  # The restore goes back to how the files were when the run started, uncommitted edits
+  # included, not to what git has.
+  sed -i 's|^  "features": {|  // a local edit that is not committed\n&|' "$DEVCONTAINER_JSON"
+  cp "$DEVCONTAINER_JSON" "$WORK/devcontainer.json.start"
+  STUB_VERSIONS[Node.js]="v24.15.0 v24.16.0"
+  STUB_LOCK_STATUS=1
+  STUB_LOCK_WRITE='{"features": {"half-written": true}}'
+  run_edit_step features >/dev/null
+  check "devcontainer.json restored" "" "$(changes "$WORK/devcontainer.json.start" "$DEVCONTAINER_JSON")"
+  check "local edit kept" "  // a local edit that is not committed" "$(grep 'not committed' "$DEVCONTAINER_JSON")"
+  check "lock restored" "" "$(changes "$HERE/testdata/devcontainer-lock.json" "$LOCK_JSON")"
+  check "failed" "Node.js: lock file refresh failed, devcontainer.json restored" "${FAILED[*]}"
+  check "updated" "" "${UPDATED[*]}"
+  check "rebuild" false "$REBUILD"
+}
+
+test_features_step_lock_row_alone() {
+  STUB_CHOICES="lock"
+  run_edit_step features >/dev/null
+  check "lock refreshed" refreshed "$(cat "$WORK/lock-calls")"
+  check "updated" "Feature lock file refreshed" "${UPDATED[*]}"
+  check "nothing changed" "" "$(changes "$WORK/devcontainer.json.orig" "$DEVCONTAINER_JSON")"
+}
+
+test_features_step_lock_row_alone_reports_a_failed_refresh() {
+  STUB_CHOICES="lock"
+  STUB_LOCK_STATUS=1
+  run_edit_step features >/dev/null
+  check "failed" "Feature lock file: refresh failed" "${FAILED[*]}"
+  check "updated" "" "${UPDATED[*]}"
+}
+
+test_features_step_without_changes_skips_lock() {
+  run_edit_step features >/dev/null
+  check "no refresh" "" "$(cat "$WORK/lock-calls" 2>/dev/null)"
+}
+
 run_tests "$@"
