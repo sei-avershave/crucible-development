@@ -1,0 +1,245 @@
+[
+  {
+    "name": "base image",
+    "kind": "base-image",
+    "source": { "type": "mcr", "image": "devcontainers/dotnet", "suffix": "-10.0-noble" }
+  },
+  {
+    "name": "AWS CLI",
+    "kind": "dockerfile-arg",
+    "arg": "AWS_CLI_VERSION",
+    "source": { "type": "github-tag", "repo": "aws/aws-cli", "prefix": "2." },
+    "url": "https://awscli.amazonaws.com/awscli-exe-linux-{arch}-{version}.zip",
+    "arch": { "amd64": "x86_64", "arm64": "aarch64" }
+  },
+  {
+    "name": "Composer",
+    "kind": "dockerfile-arg",
+    "arg": "COMPOSER_VERSION",
+    "source": { "type": "github-release", "repo": "composer/composer" },
+    "sha256": {
+      "arg": "COMPOSER_SHA256",
+      "url": "https://github.com/composer/composer/releases/download/{version}/composer.phar"
+    }
+  },
+  {
+    "name": "Vale",
+    "kind": "dockerfile-arg",
+    "arg": "VALE_VERSION",
+    "source": { "type": "github-release", "repo": "errata-ai/vale" },
+    "url": "https://github.com/errata-ai/vale/releases/download/v{version}/vale_{version}_Linux_{arch}.tar.gz",
+    "arch": { "amd64": "64-bit", "arm64": "arm64" }
+  },
+  {
+    "name": "omp",
+    "kind": "dockerfile-arg",
+    "arg": "OMP_VERSION",
+    "source": { "type": "github-release", "repo": "can1357/oh-my-pi" },
+    "sha256": {
+      "var": "OMP_SHA256",
+      "url": "https://github.com/can1357/oh-my-pi/releases/download/v{version}/omp-linux-{arch}",
+      "arch": { "amd64": "x64", "arm64": "arm64" }
+    }
+  },
+  {
+    "name": "herdr",
+    "kind": "dockerfile-arg",
+    "arg": "HERDR_VERSION",
+    "source": { "type": "github-release", "repo": "herdrdev/herdr" },
+    "sha256": {
+      "var": "HERDR_SHA256",
+      "url": "https://github.com/herdrdev/herdr/releases/download/v{version}/herdr-linux-{arch}",
+      "arch": { "amd64": "x86_64", "arm64": "aarch64" }
+    }
+  },
+  {
+    "name": "t3code",
+    "kind": "dockerfile-arg",
+    "arg": "T3CODE_VERSION",
+    "source": { "type": "github-release", "repo": "pingdotgg/t3code" },
+    "sha256": {
+      "var": "T3_SHA256",
+      "url": "https://github.com/pingdotgg/t3code/releases/download/v{version}/t3-{version}-linux-{arch}.tar.gz",
+      "arch": { "amd64": "x64", "arm64": "arm64" }
+    }
+  },
+  {
+    "name": "kubefwd",
+    "kind": "dockerfile-arg",
+    "arg": "KUBEFWD_VERSION",
+    "source": { "type": "github-release", "repo": "txn2/kubefwd" },
+    "url": "https://github.com/txn2/kubefwd/releases/download/v{version}/kubefwd_Linux_{arch}.tar.gz",
+    "arch": { "amd64": "x86_64", "arm64": "arm64" }
+  },
+  {
+    "name": "markdownlint-cli2",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers-extra/features/markdownlint-cli2",
+    "option": "version",
+    "source": { "type": "npm", "package": "markdownlint-cli2" }
+  },
+  {
+    "name": "GitHub CLI",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/github-cli",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "cli/cli" }
+  },
+  {
+    "name": ".NET SDK (extra)",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/dotnet",
+    "option": "version",
+    "hold": true,
+    "reason": "The base image supplies .NET 10; this Feature adds .NET 8 on purpose."
+  },
+  {
+    "name": "Terraform",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "hashicorp/terraform" }
+  },
+  {
+    "name": "TFLint",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "option": "tflint",
+    "source": { "type": "github-release", "repo": "terraform-linters/tflint" }
+  },
+  {
+    "name": "Terragrunt",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "option": "terragrunt",
+    "source": { "type": "github-release", "repo": "gruntwork-io/terragrunt" }
+  },
+  {
+    "name": "Go",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/go",
+    "option": "version",
+    "source": { "type": "go" }
+  },
+  {
+    "name": "Task",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers-extra/features/go-task",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "go-task/task" }
+  },
+  {
+    "name": "Docker",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/docker-in-docker",
+    "option": "version",
+    "source": { "type": "github-tag", "repo": "docker/cli", "prefix": "v" }
+  },
+  {
+    "name": "kubectl",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/kubectl-helm-minikube",
+    "option": "version",
+    "source": { "type": "k8s" }
+  },
+  {
+    "name": "Helm",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/kubectl-helm-minikube",
+    "option": "helm",
+    "source": { "type": "github-release", "repo": "helm/helm" }
+  },
+  {
+    "name": "Node.js",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/node",
+    "option": "version",
+    "source": { "type": "node" }
+  },
+  {
+    "name": "Playwright CLI",
+    "kind": "feature-option",
+    "feature": "./features/playwright-cli",
+    "option": "version",
+    "source": { "type": "npm", "package": "@playwright/cli" }
+  },
+  {
+    "name": "Aspire CLI",
+    "kind": "feature-option",
+    "feature": "./features/aspire",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "microsoft/aspire" }
+  },
+  {
+    "name": "common-utils Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/common-utils",
+    "source": { "type": "ghcr", "image": "devcontainers/features/common-utils" }
+  },
+  {
+    "name": "markdownlint-cli2 Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers-extra/features/markdownlint-cli2",
+    "source": { "type": "ghcr", "image": "devcontainers-extra/features/markdownlint-cli2" }
+  },
+  {
+    "name": "github-cli Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/github-cli",
+    "source": { "type": "ghcr", "image": "devcontainers/features/github-cli" }
+  },
+  {
+    "name": "dotnet Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/dotnet",
+    "source": { "type": "ghcr", "image": "devcontainers/features/dotnet" }
+  },
+  {
+    "name": "terraform Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "source": { "type": "ghcr", "image": "devcontainers/features/terraform" }
+  },
+  {
+    "name": "go Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/go",
+    "source": { "type": "ghcr", "image": "devcontainers/features/go" }
+  },
+  {
+    "name": "go-task Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers-extra/features/go-task",
+    "source": { "type": "ghcr", "image": "devcontainers-extra/features/go-task" }
+  },
+  {
+    "name": "docker-in-docker Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/docker-in-docker",
+    "source": { "type": "ghcr", "image": "devcontainers/features/docker-in-docker" }
+  },
+  {
+    "name": "kubectl-helm-minikube Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/kubectl-helm-minikube",
+    "source": { "type": "ghcr", "image": "devcontainers/features/kubectl-helm-minikube" }
+  },
+  {
+    "name": "node Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/node",
+    "source": { "type": "ghcr", "image": "devcontainers/features/node" }
+  },
+  {
+    "name": "k-alias Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/jaggedmountain/k-alias/k-alias",
+    "source": { "type": "ghcr", "image": "jaggedmountain/k-alias/k-alias" }
+  },
+  { "name": "Claude Code", "kind": "command", "run": "claude update" },
+  { "name": "Codex", "kind": "command", "run": "codex update" },
+  { "name": "Angular CLI", "kind": "command", "run": "npm install -g @angular/cli@latest" },
+  { "name": "dotnet-ef", "kind": "command", "run": "dotnet tool update --global dotnet-ef --version '10.*'" },
+  { "name": "gh-stack", "kind": "command", "run": "gh extension upgrade gh-stack" },
+  { "name": "moodle-cs", "kind": "command", "run": "composer global update moodlehq/moodle-cs" }
+]

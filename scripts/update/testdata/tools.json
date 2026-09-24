@@ -1,0 +1,89 @@
+[
+  {
+    "name": "base image",
+    "kind": "base-image",
+    "source": { "type": "mcr", "image": "devcontainers/dotnet", "suffix": "-10.0-noble" }
+  },
+  {
+    "name": "AWS CLI",
+    "kind": "dockerfile-arg",
+    "arg": "AWS_CLI_VERSION",
+    "source": { "type": "github-tag", "repo": "aws/aws-cli", "prefix": "2." },
+    "url": "https://example.test/awscli-exe-linux-{arch}-{version}.zip",
+    "arch": { "amd64": "x86_64", "arm64": "aarch64" }
+  },
+  {
+    "name": "Composer",
+    "kind": "dockerfile-arg",
+    "arg": "COMPOSER_VERSION",
+    "source": { "type": "github-release", "repo": "composer/composer" },
+    "sha256": { "arg": "COMPOSER_SHA256", "url": "https://example.test/composer/{version}/composer.phar" }
+  },
+  {
+    "name": "omp",
+    "kind": "dockerfile-arg",
+    "arg": "OMP_VERSION",
+    "source": { "type": "github-release", "repo": "can1357/oh-my-pi" },
+    "sha256": {
+      "var": "OMP_SHA256",
+      "url": "https://example.test/omp/v{version}/omp-linux-{arch}",
+      "arch": { "amd64": "x64", "arm64": "arm64" }
+    }
+  },
+  {
+    "name": "Vale",
+    "kind": "dockerfile-arg",
+    "arg": "VALE_VERSION",
+    "source": { "type": "github-release", "repo": "errata-ai/vale" }
+  },
+  {
+    "name": ".NET SDK (extra)",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/dotnet",
+    "option": "version",
+    "hold": true,
+    "reason": "kept on 8.0 on purpose"
+  },
+  {
+    "name": "Terraform",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "hashicorp/terraform" }
+  },
+  {
+    "name": "TFLint",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/terraform",
+    "option": "tflint",
+    "source": { "type": "github-release", "repo": "terraform-linters/tflint" }
+  },
+  {
+    "name": "Node.js",
+    "kind": "feature-option",
+    "feature": "ghcr.io/devcontainers/features/node",
+    "option": "version",
+    "source": { "type": "node" }
+  },
+  {
+    "name": "Aspire CLI",
+    "kind": "feature-option",
+    "feature": "./features/aspire",
+    "option": "version",
+    "source": { "type": "github-release", "repo": "microsoft/aspire" }
+  },
+  {
+    "name": "node Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/devcontainers/features/node",
+    "source": { "type": "ghcr", "image": "devcontainers/features/node" }
+  },
+  {
+    "name": "k-alias Feature",
+    "kind": "feature-ref",
+    "feature": "ghcr.io/jaggedmountain/k-alias/k-alias",
+    "source": { "type": "ghcr", "image": "jaggedmountain/k-alias/k-alias" }
+  },
+  { "name": "Tool A", "kind": "command", "run": "echo tool-a-ran" },
+  { "name": "Tool B", "kind": "command", "run": "exit 3" }
+]

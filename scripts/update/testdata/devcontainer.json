@@ -1,0 +1,24 @@
+{
+  "name": "Fixture for test.sh",
+  // Comments like this one must survive every edit.
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2.5": {
+      "configureZshAsDefaultShell": true
+    },
+    "ghcr.io/devcontainers/features/dotnet:2.5": {
+      "version": "8.0"
+    },
+    "ghcr.io/devcontainers/features/terraform:1.4": {
+      "version": "1.15",
+      "tflint": "0.62.0"
+    },
+    "ghcr.io/devcontainers/features/node:2.0": {
+      "version": "24.15", // trailing comments survive too
+      "installYarnUsingApt": false
+    },
+    "ghcr.io/jaggedmountain/k-alias/k-alias:1": {},
+    "./features/aspire": {
+      "version": "13.5"
+    }
+  }
+}

@@ -66,10 +66,20 @@ run_tests() {
   return "$status"
 }
 
-# Gives each test a fresh work directory.
+# Gives each test fresh copies of the fixture files and empty summary lists.
 setup() {
   WORK=$(mktemp -d)
   mkdir -p "$WORK/sums"
+  cp "$HERE/testdata/Dockerfile" "$HERE/testdata/devcontainer.json" \
+    "$HERE/testdata/devcontainer-lock.json" "$WORK/"
+  DOCKERFILE=$WORK/Dockerfile
+  DEVCONTAINER_JSON=$WORK/devcontainer.json
+  LOCK_JSON=$WORK/devcontainer-lock.json
+  MANIFEST=$HERE/testdata/tools.json
+  load_manifest
+  UPDATED=() SKIPPED=() FAILED=() HELD=() REBUILD=false IN_PROGRESS=""
+  cp "$DOCKERFILE" "$WORK/Dockerfile.orig"
+  cp "$DEVCONTAINER_JSON" "$WORK/devcontainer.json.orig"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -126,6 +136,104 @@ test_pick_nothing_when_pin_is_newer_than_all() {
 
 test_pick_single_component_feature_ref() {
   check "rows" "major 2" "$(printf '%s\n' 1 1.0 1.0.6 2 2.0 2.0.0 latest | pick_candidates 1)"
+}
+
+# Prints the manifest entry named $1, and its index.
+entry() { jq -c --arg n "$1" '.[] | select(.name == $n)' "$MANIFEST"; }
+index_of() { jq --arg n "$1" 'map(.name) | index($n)' "$MANIFEST"; }
+
+SHA_A=$(printf 'a%.0s' {1..64})
+SHA_B=$(printf 'b%.0s' {1..64})
+SHA_C=$(printf 'c%.0s' {1..64})
+SHA_1=$(printf '1%.0s' {1..64})
+SHA_2=$(printf '2%.0s' {1..64})
+SHA_3=$(printf '3%.0s' {1..64})
+
+# ---------------------------------------------------------------------------------------------
+# Manifest and anchors
+
+test_reads_every_fixture_value() {
+  local name
+  declare -A want=(
+    ["base image"]=2.0.5 ["AWS CLI"]=2.32.9 [Composer]=2.10.3 [omp]=18.2.7 [Vale]=3.12.0
+    [".NET SDK (extra)"]=8.0 [Terraform]=1.15 [TFLint]=0.62.0 [Node.js]=24.15
+    ["Aspire CLI"]=13.5 ["node Feature"]=2.0 ["k-alias Feature"]=1
+  )
+  for name in "${!want[@]}"; do
+    check "$name" "${want[$name]}" "$(current_value "$(entry "$name")")"
+  done
+}
+
+test_reads_checksums() {
+  check "omp amd64" "$SHA_A" "$(anchor_value "$(anchor "$(entry omp)" sha256:amd64)")"
+  check "omp arm64" "$SHA_B" "$(anchor_value "$(anchor "$(entry omp)" sha256:arm64)")"
+  check "composer" "$SHA_C" "$(anchor_value "$(anchor "$(entry Composer)" sha256)")"
+}
+
+test_option_lookup_stays_inside_its_feature_block() {
+  # common-utils has no "version" option; the lookup must not find node's or terraform's.
+  local e='{"kind":"feature-option","feature":"ghcr.io/devcontainers/features/common-utils","option":"version"}'
+  check_status "common-utils version" 1 current_value "$e"
+}
+
+test_feature_names_match_exactly() {
+  local e='{"kind":"feature-ref","feature":"ghcr.io/devcontainers/features/no"}'
+  check_status "prefix of node" 1 current_value "$e"
+}
+
+test_every_pin_in_the_real_files_has_a_manifest_entry() {
+  local arg feature real=$UPDATE_DIR/tools.json
+  for arg in $(grep -oE '^ARG [A-Z0-9_]+_VERSION=' "$REPO_ROOT/.devcontainer/Dockerfile" | cut -c5- | tr -d =); do
+    check "$arg has a tools.json entry" true "$(jq --arg a "$arg" 'any(.[]; .arg == $a)' "$real")"
+  done
+  for feature in $(grep -oE '"ghcr\.io/[^"]+:[0-9.]+"' "$REPO_ROOT/.devcontainer/devcontainer.json" |
+    tr -d '"' | sed 's/:[0-9.]*$//'); do
+    check "$feature has a feature-ref entry" true \
+      "$(jq --arg f "$feature" 'any(.[]; .kind == "feature-ref" and .feature == $f)' "$real")"
+  done
+}
+
+test_case_line_lookup_stops_at_next_arg() {
+  # Vale's RUN block has no VALE_SHA256; the lookup must not wander into another block.
+  local e='{"kind":"dockerfile-arg","arg":"COMPOSER_VERSION","sha256":{"var":"OMP_SHA256"}}'
+  check_status "OMP_SHA256 after COMPOSER_VERSION" 1 anchor_value "$(anchor "$e" sha256:amd64)"
+}
+
+test_real_manifest_matches_real_files() {
+  local e name kind n=0
+  MANIFEST=$UPDATE_DIR/tools.json
+  DOCKERFILE=$REPO_ROOT/.devcontainer/Dockerfile
+  DEVCONTAINER_JSON=$REPO_ROOT/.devcontainer/devcontainer.json
+  load_manifest
+  check "unique names" "" "$(jq -r '.[].name' "$MANIFEST" | sort | uniq -d)"
+  for e in "${ENTRIES[@]}"; do
+    n=$((n + 1))
+    name=$(field "$e" .name)
+    kind=$(field "$e" .kind)
+    if [[ $kind == command ]]; then
+      check "$name has run" true "$(jq 'has("run")' <<<"$e")"
+      continue
+    fi
+    if ! current_value "$e" >/dev/null; then
+      check "$name current value" "a version" "not found"
+    fi
+    if [[ $(field "$e" .hold) != true ]]; then
+      check "$name source" true \
+        "$(jq '.source.type | IN("github-release","github-tag","npm","go","node","k8s","mcr","ghcr")' <<<"$e")"
+    fi
+    if [[ -n $(field "$e" .sha256.arg) ]]; then
+      [[ $(anchor_value "$(anchor "$e" sha256)") =~ ^[0-9a-f]{64}$ ]] ||
+        check "$name checksum" "64 hex digits" "$(anchor_value "$(anchor "$e" sha256)")"
+    fi
+    if [[ -n $(field "$e" .sha256.var) ]]; then
+      local arch
+      for arch in $(jq -r '.sha256.arch | keys[]' <<<"$e"); do
+        [[ $(anchor_value "$(anchor "$e" "sha256:$arch")") =~ ^[0-9a-f]{64}$ ]] ||
+          check "$name $arch checksum" "64 hex digits" "$(anchor_value "$(anchor "$e" "sha256:$arch")")"
+      done
+    fi
+  done
+  check "entries checked" "$(jq length "$MANIFEST")" "$n"
 }
 
 run_tests "$@"
