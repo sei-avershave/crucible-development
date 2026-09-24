@@ -589,3 +589,182 @@ run_edit_step() {
     REBUILD=true
   fi
 }
+
+# Runs the chosen in-place updaters (manifest entries of kind "command").
+run_tools() {
+  local i e tags
+  local -a args=()
+  for i in $(entries_of_kind command); do
+    e=${ENTRIES[i]}
+    args+=("$i" "$(field "$e" .name)  ($(field "$e" .run))" on)
+  done
+  if ! tags=$(dialog_checklist "Container tools (updated in place)" "${args[@]}"); then
+    clear_screen
+    SKIPPED+=("Container tools: cancelled")
+    return 0
+  fi
+  clear_screen
+  for i in $tags; do
+    e=${ENTRIES[i]}
+    echo "==> $(field "$e" .name): $(field "$e" .run)"
+    if run_command "$(field "$e" .run)"; then
+      UPDATED+=("$(field "$e" .name) (in place)")
+    else
+      FAILED+=("$(field "$e" .name): '$(field "$e" .run)' failed")
+    fi
+  done
+}
+
+# Pulls every Crucible repo after a confirmation.
+run_repos() {
+  if ! dialog_yesno "Crucible repos" \
+    "Pull every repository in scripts/repos.json and scripts/repos.local.json with scripts/sync-repos.sh --pull?"; then
+    clear_screen
+    SKIPPED+=("Crucible repos: cancelled")
+    return 0
+  fi
+  clear_screen
+  if sync_repos; then
+    UPDATED+=("Crucible repos (git pull)")
+  else
+    FAILED+=("Crucible repos: scripts/sync-repos.sh --pull failed")
+  fi
+}
+
+# Prints current and newest versions for every entry except commands. Fails if a lookup failed.
+run_check() {
+  local i e cur in_major newest status errors=0
+  local -a idx
+  mapfile -t idx < <(entries_of_kind dockerfile-arg base-image feature-option feature-ref)
+  echo "Looking up ${#idx[@]} versions..." >&2
+  lookup_all "" "$WORK/check" "${idx[@]}"
+  printf '%-30s %-12s %-12s %-12s %s\n' ITEM CURRENT "IN MAJOR" NEWEST STATUS
+  for i in "${idx[@]}"; do
+    e=${ENTRIES[i]}
+    cur=$(current_value "$e") || cur="?"
+    in_major=$cur
+    newest=$cur
+    if [[ $(field "$e" .hold) == true ]]; then
+      status="held: $(field "$e" .reason)"
+    elif [[ -s $WORK/check/$i.err ]]; then
+      status="error: $(tail -n1 "$WORK/check/$i.err")"
+      in_major="-"
+      newest="-"
+      errors=1
+    else
+      in_major=$(awk '$1 == "minor" { print $2 }' "$WORK/check/$i.rows")
+      newest=$(awk '$1 == "major" { print $2 }' "$WORK/check/$i.rows")
+      if [[ -n $newest ]]; then
+        status=MAJOR
+      elif [[ -n $in_major ]]; then
+        status=update
+      else
+        status="up to date"
+      fi
+      in_major=${in_major:-$cur}
+      newest=${newest:-$in_major}
+    fi
+    printf '%-30s %-12s %-12s %-12s %s\n' "$(field "$e" .name)" "$cur" "$in_major" "$newest" "$status"
+  done
+  return "$errors"
+}
+
+# Prints the steps chosen in the top-level checklist.
+choose_steps() {
+  dialog_checklist "What to update" \
+    pins "Pinned tools (Dockerfile)" on \
+    features "Features (devcontainer.json)" on \
+    tools "Container tools (updated in place)" on \
+    repos "Crucible repos (git pull)" on
+}
+
+# Prints each non-empty list: title $1, then items.
+print_list() {
+  local title=$1
+  shift
+  if (($#)); then
+    echo "$title:"
+    printf '  %s\n' "$@"
+  fi
+}
+
+print_summary() {
+  echo
+  print_list Updated "${UPDATED[@]}"
+  print_list Skipped "${SKIPPED[@]}"
+  print_list Failed "${FAILED[@]}"
+  print_list Held "${HELD[@]}"
+  if ((${#UPDATED[@]} + ${#SKIPPED[@]} + ${#FAILED[@]} + ${#HELD[@]} == 0)); then
+    echo "Nothing to update."
+  fi
+  git -C "$REPO_ROOT" diff --stat -- .devcontainer || true
+  if $REBUILD; then
+    echo "Rebuild the dev container to use the new pins and Feature versions."
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Entry point
+
+# EXIT trap: removes the run's temp directory.
+on_exit() {
+  rm -rf "${WORK:-}"
+}
+
+main() {
+  set -euo pipefail
+  local step=${1:-}
+  case $step in
+    all | pins | features | tools | repos | check) ;;
+    *)
+      echo "usage: $0 all|pins|features|tools|repos|check" >&2
+      exit 2 ;;
+  esac
+  if [[ $step != check ]] && ! [[ -t 0 && -t 1 ]]; then
+    echo "update.sh $step needs an interactive terminal. For a report with no prompts, run: task update:check" >&2
+    exit 1
+  fi
+
+  WORK=$(mktemp -d)
+  mkdir -p "$WORK/sums"
+  IN_PROGRESS=""
+  trap on_exit EXIT
+  trap on_interrupt INT TERM
+  load_manifest
+  UPDATED=() SKIPPED=() FAILED=() HELD=() REBUILD=false
+  run_steps "$step"
+}
+
+# Runs step $1 (all, pins, features, tools, repos, or check) and, except for check, prints the
+# summary. Fails if a chosen item failed or, for check, if a lookup failed.
+run_steps() {
+  local step=$1 s chosen
+  if [[ $step == check ]]; then
+    run_check
+    return
+  fi
+
+  local -a steps=("$step")
+  if [[ $step == all ]]; then
+    if ! chosen=$(choose_steps); then
+      clear_screen
+      echo "Nothing chosen."
+      return 0
+    fi
+    clear_screen
+    mapfile -t steps <<<"$chosen"
+  fi
+  for s in "${steps[@]}"; do
+    case $s in
+      pins | features) run_edit_step "$s" ;;
+      tools) run_tools ;;
+      repos) run_repos ;;
+    esac
+  done
+  print_summary
+  ((${#FAILED[@]} == 0))
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
+fi

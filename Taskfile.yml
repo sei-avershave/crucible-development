@@ -9,6 +9,65 @@ version: '3'
 silent: true
 
 tasks:
+  update:
+    desc: Choose what to update, then update it (pins, Features, container tools, repos)
+    interactive: true
+    preconditions: &lookup-preconditions
+      - sh: command -v dialog >/dev/null
+        msg: dialog is missing. Rebuild the dev container, or run `sudo apt-get install -y dialog`.
+      - sh: command -v jq >/dev/null && command -v curl >/dev/null
+        msg: jq and curl are required. Rebuild the dev container.
+      - sh: gh auth status >/dev/null 2>&1
+        msg: Version lookups use the GitHub API. Run `gh auth login` first.
+    cmds:
+      - bash scripts/update/update.sh all
+
+  update:pins:
+    desc: Update the version pins and checksums in .devcontainer/Dockerfile
+    interactive: true
+    preconditions: *lookup-preconditions
+    cmds:
+      - bash scripts/update/update.sh pins
+
+  update:features:
+    desc: Update Feature versions in .devcontainer/devcontainer.json and refresh the lock file
+    interactive: true
+    preconditions: *lookup-preconditions
+    cmds:
+      - bash scripts/update/update.sh features
+
+  update:tools:
+    desc: Update tools that update themselves in the running container (Claude Code, Codex, ...)
+    interactive: true
+    preconditions:
+      - sh: command -v dialog >/dev/null
+        msg: dialog is missing. Rebuild the dev container, or run `sudo apt-get install -y dialog`.
+      - sh: command -v jq >/dev/null
+        msg: jq is required. Rebuild the dev container.
+    cmds:
+      - bash scripts/update/update.sh tools
+
+  update:repos:
+    desc: Pull every Crucible repository (scripts/sync-repos.sh --pull)
+    interactive: true
+    preconditions:
+      - sh: command -v dialog >/dev/null
+        msg: dialog is missing. Rebuild the dev container, or run `sudo apt-get install -y dialog`.
+      - sh: command -v jq >/dev/null
+        msg: jq is required. Rebuild the dev container.
+    cmds:
+      - bash scripts/update/update.sh repos
+
+  update:check:
+    desc: Report current and newest versions for every pin, with no prompts and no edits
+    preconditions:
+      - sh: command -v jq >/dev/null && command -v curl >/dev/null
+        msg: jq and curl are required. Rebuild the dev container.
+      - sh: gh auth status >/dev/null 2>&1
+        msg: Version lookups use the GitHub API. Run `gh auth login` first.
+    cmds:
+      - bash scripts/update/update.sh check
+
   update:test:
     desc: Run the offline tests for scripts/update
     cmds:

@@ -615,4 +615,84 @@ test_features_step_without_changes_skips_lock() {
   check "no refresh" "" "$(cat "$WORK/lock-calls" 2>/dev/null)"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Tools, repos, check, and main
+
+test_tools_step_runs_chosen_commands() {
+  local out
+  out=$(run_tools; declare -p UPDATED FAILED)
+  check "output" "tool-a-ran" "$(grep -x tool-a-ran <<<"$out")"
+  eval "$(grep '^declare' <<<"$out")"
+  check "updated" "Tool A (in place)" "${UPDATED[*]}"
+  check "failed" "Tool B: 'exit 3' failed" "${FAILED[*]}"
+}
+
+test_tools_step_runs_only_chosen() {
+  STUB_CHOICES=$(index_of "Tool A")
+  run_tools >/dev/null
+  check "updated" "Tool A (in place)" "${UPDATED[*]}"
+  check "failed" "" "${FAILED[*]}"
+}
+
+test_repos_step() {
+  run_repos >/dev/null
+  check "pulled" pulled "$(cat "$WORK/sync-calls")"
+  check "updated" "Crucible repos (git pull)" "${UPDATED[*]}"
+}
+
+test_repos_step_cancel() {
+  STUB_CANCEL=1
+  run_repos >/dev/null
+  check "not pulled" "" "$(cat "$WORK/sync-calls" 2>/dev/null)"
+  check "skipped" "Crucible repos: cancelled" "${SKIPPED[*]}"
+}
+
+test_check_reports_every_status() {
+  local out
+  STUB_VERSIONS["base image"]="2.0.5"
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0 v19.0.0"
+  STUB_VERSIONS[Node.js]="v24.15.0 v24.16.0"
+  out=$(run_check 2>/dev/null) || true
+  check_status "exit status with a failed lookup" 1 run_check
+  check "base image" "base image                     2.0.5        2.0.5        2.0.5        up to date" \
+    "$(grep '^base image' <<<"$out")"
+  check "omp" "omp                            18.2.7       18.3.0       19.0.0       MAJOR" "$(grep '^omp' <<<"$out")"
+  check "node" "Node.js                        24.15        24.16        24.16        update" "$(grep '^Node.js' <<<"$out")"
+  check "dotnet" ".NET SDK (extra)               8.0          8.0          8.0          held: kept on 8.0 on purpose" \
+    "$(grep '^.NET' <<<"$out")"
+  check "vale" "Vale                           3.12.0       -            -            error: lookup failed: HTTP 404: Not Found" \
+    "$(grep '^Vale' <<<"$out")"
+  check "no commands" "" "$(grep '^Tool' <<<"$out")"
+  check "no downloads" "" "$(ls "$WORK/sums")"
+}
+
+test_all_runs_only_the_chosen_steps() {
+  STUB_CHOICES=repos
+  run_steps all >/dev/null
+  check "pulled" pulled "$(cat "$WORK/sync-calls")"
+  check "nothing looked up" "" "$(cat "$WORK/fetch-calls" 2>/dev/null)"
+}
+
+test_all_cancel_runs_nothing() {
+  STUB_CANCEL=1
+  check "output" "Nothing chosen." "$(run_steps all)"
+}
+
+test_run_steps_fails_when_a_chosen_item_failed() {
+  check_status "clean pull" 0 run_steps repos
+  STUB_SYNC_STATUS=1
+  check_status "failed pull" 1 run_steps repos
+}
+
+test_main_requires_a_terminal() {
+  local out status
+  out=$(bash "$UPDATE_DIR/update.sh" pins </dev/null 2>&1) && status=0 || status=$?
+  check "status" 1 "$status"
+  check "message" "update.sh pins needs an interactive terminal. For a report with no prompts, run: task update:check" "$out"
+}
+
+test_main_rejects_unknown_step() {
+  check_status "unknown step" 2 bash "$UPDATE_DIR/update.sh" everything
+}
+
 run_tests "$@"
