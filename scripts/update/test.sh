@@ -568,6 +568,20 @@ test_pins_step_records_unchosen_rows() {
   check "skipped" "base image: not chosen" "$(printf '%s\n' "${SKIPPED[@]}" | grep '^base image')"
 }
 
+test_pins_step_interrupt_mid_item_restores_file() {
+  # Ctrl-C after omp's version is written but before its checksums, with main's trap installed.
+  local status=0
+  STUB_VERSIONS[omp]="v18.2.7 v18.3.0"
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-x64"]=$SHA_1
+  STUB_URLS["https://example.test/omp/v18.3.0/omp-linux-arm64"]=$SHA_2
+  STUB_CHOICES="$(index_of omp):minor"
+  eval "real_$(declare -f anchor_write)"
+  anchor_write() { real_anchor_write "$@"; kill -INT "$BASHPID"; }
+  (trap on_interrupt INT TERM; run_edit_step pins) >/dev/null 2>&1 || status=$?
+  check "exit status" 130 "$status"
+  check "file restored" "" "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
 test_features_step_refreshes_lock_once_and_reports_held() {
   STUB_VERSIONS[Node.js]="v24.15.0 v24.16.0"
   STUB_VERSIONS[TFLint]="v0.62.0 v0.62.1"

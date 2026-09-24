@@ -486,7 +486,7 @@ sync_repos() {
 
 # Runs the pins or features step ($1): look up and verify, show the checklist, apply the choices.
 run_edit_step() {
-  local step=$1 title i kind v e old row label tags err changed=false
+  local step=$1 title i kind v e old row label tags err sums changed=false
   local -a idx=() args=() applied=()
   local -A cand=() chosen=()
   if [[ $step == pins ]]; then
@@ -550,11 +550,13 @@ run_edit_step() {
     e=${ENTRIES[i]}
     v=${cand["$i $kind"]}
     old=$(current_value "$e")
-    if err=$(apply_item "$e" "$v" "$(cat "$WORK/sums/$i-$v" 2>/dev/null)" 2>&1); then
+    sums=$(cat "$WORK/sums/$i-$v" 2>/dev/null || true)
+    # Not in $(...): a subshell would hide IN_PROGRESS from the Ctrl-C trap and die mid-edit.
+    if apply_item "$e" "$v" "$sums" 2>"$WORK/apply.err"; then
       applied+=("$(field "$e" .name)  $old -> $v")
       changed=true
     else
-      FAILED+=("$(field "$e" .name): $err")
+      FAILED+=("$(field "$e" .name): $(<"$WORK/apply.err")")
     fi
   done < <(resolve_choices <<<"$tags")
 
