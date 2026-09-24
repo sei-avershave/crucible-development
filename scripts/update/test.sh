@@ -236,4 +236,91 @@ test_real_manifest_matches_real_files() {
   check "entries checked" "$(jq length "$MANIFEST")" "$n"
 }
 
+# ---------------------------------------------------------------------------------------------
+# Applying edits
+
+test_apply_per_arch_checksums() {
+  apply_item "$(entry omp)" 18.3.0 $'amd64 '"$SHA_1"$'\narm64 '"$SHA_2"
+  check "diff" "-ARG OMP_VERSION=18.2.7
++ARG OMP_VERSION=18.3.0
+-    amd64) OMP_ARCH=\"x64\"; OMP_SHA256=\"$SHA_A\" ;; \\
+-    arm64) OMP_ARCH=\"arm64\"; OMP_SHA256=\"$SHA_B\" ;; \\
++    amd64) OMP_ARCH=\"x64\"; OMP_SHA256=\"$SHA_1\" ;; \\
++    arm64) OMP_ARCH=\"arm64\"; OMP_SHA256=\"$SHA_2\" ;; \\" \
+    "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
+test_apply_quoted_arg_keeps_quotes() {
+  apply_item "$(entry "AWS CLI")" 2.33.0 ""
+  check "diff" $'-ARG AWS_CLI_VERSION="2.32.9"\n+ARG AWS_CLI_VERSION="2.33.0"' \
+    "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
+test_apply_single_checksum() {
+  apply_item "$(entry Composer)" 2.10.4 "- $SHA_3"
+  check "diff" "-ARG COMPOSER_VERSION=2.10.3
+-ARG COMPOSER_SHA256=$SHA_C
++ARG COMPOSER_VERSION=2.10.4
++ARG COMPOSER_SHA256=$SHA_3" "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
+test_apply_base_image_keeps_suffix() {
+  apply_item "$(entry "base image")" 2.1.0 ""
+  check "diff" $'-FROM mcr.microsoft.com/devcontainers/dotnet:2.0.5-10.0-noble\n+FROM mcr.microsoft.com/devcontainers/dotnet:2.1.0-10.0-noble' \
+    "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+
+test_apply_option_keeps_trailing_comment() {
+  apply_item "$(entry Node.js)" 24.16 ""
+  check "diff" $'-      "version": "24.15", // trailing comments survive too\n+      "version": "24.16", // trailing comments survive too' \
+    "$(changes "$WORK/devcontainer.json.orig" "$DEVCONTAINER_JSON")"
+}
+
+test_apply_second_option_in_shared_block() {
+  apply_item "$(entry TFLint)" 0.63.0 ""
+  check "diff" $'-      "tflint": "0.62.0"\n+      "tflint": "0.63.0"' \
+    "$(changes "$WORK/devcontainer.json.orig" "$DEVCONTAINER_JSON")"
+}
+
+test_apply_ref_then_option_in_same_feature() {
+  apply_item "$(entry "node Feature")" 2.1 ""
+  apply_item "$(entry Node.js)" 24.16 ""
+  check "diff" '-    "ghcr.io/devcontainers/features/node:2.0": {
+-      "version": "24.15", // trailing comments survive too
++    "ghcr.io/devcontainers/features/node:2.1": {
++      "version": "24.16", // trailing comments survive too' \
+    "$(changes "$WORK/devcontainer.json.orig" "$DEVCONTAINER_JSON")"
+}
+
+test_apply_ref_on_empty_block() {
+  apply_item "$(entry "k-alias Feature")" 2 ""
+  check "diff" $'-    "ghcr.io/jaggedmountain/k-alias/k-alias:1": {},\n+    "ghcr.io/jaggedmountain/k-alias/k-alias:2": {},' \
+    "$(changes "$WORK/devcontainer.json.orig" "$DEVCONTAINER_JSON")"
+}
+
+test_apply_keeps_inode() {
+  local before
+  before=$(stat -c %i "$DOCKERFILE")
+  apply_item "$(entry Vale)" 3.13.0 ""
+  check "inode" "$before" "$(stat -c %i "$DOCKERFILE")"
+}
+
+test_failed_edit_restores_file() {
+  # Drop the arm64 checksum line so the second checksum edit fails after the version edit.
+  sed -i '/arm64) OMP_ARCH/d' "$DOCKERFILE"
+  cp "$DOCKERFILE" "$WORK/Dockerfile.broken"
+  check_status "apply" 1 apply_item "$(entry omp)" 18.3.0 $'amd64 '"$SHA_1"$'\narm64 '"$SHA_2"
+  check "file unchanged" "" "$(changes "$WORK/Dockerfile.broken" "$DOCKERFILE")"
+  check "no snapshot left" "" "$(ls "$WORK" | grep snapshot)"
+}
+
+test_interrupt_restores_file_in_progress() {
+  cp "$DOCKERFILE" "$WORK/snapshot.test"
+  echo "half-written" >"$DOCKERFILE"
+  IN_PROGRESS="$DOCKERFILE|$WORK/snapshot.test"
+  check_status "on_interrupt" 130 on_interrupt_in_subshell
+  check "file restored" "" "$(changes "$WORK/Dockerfile.orig" "$DOCKERFILE")"
+}
+on_interrupt_in_subshell() { (on_interrupt); }
+
 run_tests "$@"

@@ -218,3 +218,64 @@ current_value() {
   a=$(anchor "$1" version) || return 1
   anchor_value "$a"
 }
+
+# ---------------------------------------------------------------------------------------------
+# Applying edits
+
+# Applies version $2 to entry $1, plus the checksums in $3 ("<arch> <sha256>" lines, with "-"
+# as the arch for a single checksum). Every edit is read back; if any edit fails, the file is
+# restored to how it was before this item and the function fails.
+apply_item() {
+  local e=$1 new=$2 sums=${3:-} file snapshot
+  file=$(anchor "$e" version) || return 1
+  file=${file%%|*}
+  snapshot=$(mktemp "$WORK/snapshot.XXXXXX")
+  cp "$file" "$snapshot"
+  IN_PROGRESS="$file|$snapshot"
+  if apply_item_edits "$e" "$new" "$sums"; then
+    IN_PROGRESS=""
+    rm -f "$snapshot"
+    return 0
+  fi
+  cat "$snapshot" >"$file"
+  IN_PROGRESS=""
+  rm -f "$snapshot"
+  return 1
+}
+
+# The edits behind apply_item, without the restore on failure.
+apply_item_edits() {
+  local e=$1 new=$2 sums=$3 a old arch sum
+  a=$(anchor "$e" version) || return 1
+  old=$(anchor_value "$a") || { echo "cannot read the current version" >&2; return 1; }
+  anchor_write "$a" "$old" "$new" || return 1
+  if [[ $(anchor_value "$a") != "$new" ]]; then
+    echo "version did not read back as $new" >&2
+    return 1
+  fi
+  while read -r arch sum; do
+    if [[ -z $arch ]]; then
+      continue
+    fi
+    if [[ $arch == - ]]; then
+      a=$(anchor "$e" sha256) || return 1
+    else
+      a=$(anchor "$e" "sha256:$arch") || return 1
+    fi
+    old=$(anchor_value "$a") || { echo "cannot find the ${arch/-/single} checksum" >&2; return 1; }
+    anchor_write "$a" "$old" "$sum" || return 1
+    if [[ $(anchor_value "$a") != "$sum" ]]; then
+      echo "checksum for $arch did not read back as written" >&2
+      return 1
+    fi
+  done <<<"$sums"
+}
+
+# Ctrl-C trap: puts back the file an edit was in progress on, then exits.
+on_interrupt() {
+  if [[ -n ${IN_PROGRESS:-} ]]; then
+    cat "${IN_PROGRESS#*|}" >"${IN_PROGRESS%%|*}"
+    echo "Interrupted; restored ${IN_PROGRESS%%|*}." >&2
+  fi
+  exit 130
+}
