@@ -1,0 +1,15 @@
+# Copyright 2026 Carnegie Mellon University. All Rights Reserved.
+# Released under a MIT (SEI)-style license. See LICENSE.md in the project root for license information.
+#
+# Dev container maintenance tasks. Run `task --list` to see them. The update tasks are described
+# in the README under "Updating the Dev Container".
+
+version: '3'
+
+silent: true
+
+tasks:
+  update:test:
+    desc: Run the offline tests for scripts/update
+    cmds:
+      - bash scripts/update/test.sh {{.CLI_ARGS}}
